@@ -26,10 +26,28 @@ export async function loadItems(phrase) {
   return data;
 }
 
+/**
+ * The public outline of the parts (data/outline.json, written by scripts/export_items.py): titles, how many
+ * researchers, and the general instructions. It holds nothing about any person and is enough to draw the
+ * start page while the items are still closed.
+ */
+export async function loadOutline() {
+  const res = await fetch('data/outline.json', { cache: 'no-cache' });
+  if (!res.ok) throw new Error(`data/outline.json: HTTP ${res.status}`);
+  const o = await res.json();
+  const byId = new Map(o.sheets.map((s) => [s.id, s]));
+  return {
+    common_instructions: o.common_instructions,
+    sheets: SHEET_ORDER.map((id) => byId.get(id)).filter(Boolean)
+      .map((s) => ({ id: s.id, title: s.title, short: s.short, items: s.ranks.map((rank) => ({ rank })) })),
+  };
+}
+
 // ---- tracks ---------------------------------------------------------------------------------
 // A track says which part and which share of the researchers an evaluator rates. It comes with the
 // invitation link (?t=...), is stored with the evaluator at sign-up, and never changes afterwards.
 //   p1, p2, all            Part 1 only, Part 2 only, or both (Part 1 first), every researcher
+//                          (a new evaluator who opens the site without ?t= gets "all")
 //   p1-1of2, p2-3of4, ...  the same, for researchers whose rank leaves remainder k-1 when divided by n
 // Ranks are written by scripts/export_items.py so that every share holds each school in proportion.
 

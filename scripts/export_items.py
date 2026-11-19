@@ -47,6 +47,30 @@ def guide_sections(path):
     return {k: "\n".join(v).strip() for k, v in out.items()}
 
 
+def write_outline(data, path):
+    """The public outline of the parts: titles, the researchers' ranks (plain numbers) and the general instructions.
+    The site draws its start page from it before the access phrase is given, so it must hold nothing about a person."""
+    outline = {"format": "profile-rating-outline/1", "built": data["version"], "common_instructions": data["common_instructions"],
+               "sheets": [{"id": s["id"], "title": s["title"], "short": s["short"], "ranks": sorted(it["rank"] for it in s["items"])}
+                          for s in data["sheets"]]}
+    text = json.dumps(outline, ensure_ascii=False)
+    for p in data["people"].values():
+        if p["name"] in text or (p.get("school") and p["school"] in text): fail("the outline would name a person or a school")
+    for s in outline["sheets"]:
+        if not all(isinstance(r, int) for r in s["ranks"]): fail("ranks must be plain numbers")
+    with open(path, "w", encoding="utf-8") as f: f.write(text + "\n")
+    return outline
+
+
+def open_box(path, phrase):
+    from cryptography.hazmat.primitives import hashes
+    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
+    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
+    box = json.load(open(path, encoding="utf-8"))
+    k256 = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=base64.b64decode(box["salt"]), iterations=box["iterations"]).derive(phrase.encode("utf-8"))
+    return json.loads(gzip.decompress(AESGCM(k256).decrypt(base64.b64decode(box["iv"]), base64.b64decode(box["ciphertext"]), None)))
+
+
 def norm(s):
     """Comparison form: Excel drops control characters and normalises line ends."""
     return re.sub(r"\s+", " ", re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(s or ""))).strip()
@@ -60,11 +84,19 @@ def main():
     ap.add_argument("--phrase-file", default=None, help="default: <paper>/human_eval/private/site_access_phrase.txt")
     ap.add_argument("--share", default="1of3", help="which school-balanced share of the kit's researchers goes on the site, KofN "
                     "(default 1of3 = 40 of 120; 1of1 = all)")
+    ap.add_argument("--outline-only", action="store_true", help="do not rebuild the items: open the published file with the access "
+                    "phrase and write only data/outline.json from it")
     a = ap.parse_args()
+    outline_path = os.path.join(os.path.dirname(os.path.abspath(a.out)), "outline.json")
     paper = os.path.realpath(os.path.expanduser(a.paper))
     kit = os.path.join(paper, "human_eval")
     base = os.path.expanduser(f"~/.cache/medschool-navigator/metrics_input/{a.tag}")
     phrase_file = os.path.expanduser(a.phrase_file) if a.phrase_file else os.path.join(kit, "private", "site_access_phrase.txt")
+    if a.outline_only:
+        o = write_outline(open_box(a.out, "".join(open(phrase_file, encoding="utf-8").read().split())), outline_path)
+        print("outline of the published items -> " + os.path.relpath(outline_path, SITE) + ": "
+              + "; ".join(f"{s['title']}, {len(s['ranks'])} researchers" for s in o["sheets"]))
+        return
 
     key = list(csv.DictReader(open(os.path.join(kit, "private", "rating_key.csv"), encoding="utf-8")))
     mach = {}
@@ -171,6 +203,7 @@ def main():
     assert back == data
     published = open(a.out, encoding="utf-8").read()
     assert not any(p["name"] in published for p in people.values())
+    write_outline(data, outline_path)
     per_school = collections.Counter(p["school"] for p in people.values())
     as_a = sum(key_by_rid[rid]["self_written_is"] == "A" for rid in kept)
     import statistics

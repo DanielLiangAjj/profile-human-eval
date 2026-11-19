@@ -23,8 +23,13 @@ released. This repository is public (GitHub Pages needs that on a free account),
 `data/items.enc.json`: the items compressed and encrypted (AES-256-GCM, key derived from an access
 phrase with PBKDF2-SHA256). The phrase is kept in the paper folder
 (`human_eval/private/site_access_phrase.txt`), never in this repository. It reaches an evaluator inside
-the invitation link, after `#`; that part of an address is not sent to any server. Someone who opens the
-site without the link is asked for the phrase and sees nothing else.
+the invitation link, after `#`; that part of an address is not sent to any server.
+
+The start page is the same however the site is opened: what the study is, how to judge, the parts with
+their times, **Start** (name and email) and **Resume with a code**. Someone who opens the bare address,
+without the link, sees that page too, drawn from `data/outline.json` (part titles, numbers and the
+general instructions; nothing about any person). The Start and Resume forms then have one more field,
+the access phrase, and no researcher is shown until it is given.
 
 ## The researchers and the invitation links
 
@@ -44,7 +49,7 @@ python3 scripts/invitation_links.py --base https://<account>.github.io/profile-h
 |---|---|
 | `p1` | Part 1 (two texts, blinded), all 40 researchers. For the trainee raters: they all get this same link. |
 | `p2` | Part 2 (interests, not blinded), all 40 researchers. For the two authors. |
-| `all` | both parts, Part 1 first |
+| `all` | both parts, Part 1 first. Also what a new evaluator gets who signs up without a part in the address. |
 | `p1-1of2`, `p2-2of3`, ... | one of N equal, school-balanced shares of the 40 (up to 6). Not used in the agreed design. |
 
 The printed links contain the access phrase: send them only to the evaluators.
@@ -109,6 +114,7 @@ the kit's sheet (`human_eval/rating_sheet.xlsx`), keeps the 40 (`--share 1of3`, 
 them in `human_eval/private/rating_set.csv`, reads the wording raters see from
 `human_eval/rating_guide.md`, and refuses to write if anything differs or if the items would say which
 text is which. Run it again after any change to the guide. Do not rebuild once evaluators have started.
+It also writes `data/outline.json`; `--outline-only` writes just that file from the published items.
 
 ## Pull the results
 
@@ -156,6 +162,7 @@ assets/state.js, storage.js,           tracks, session and item order, localStor
   markdown.js, dom.js
 assets/style.css
 data/items.enc.json                    the items, encrypted (generated)
+data/outline.json                      part titles, numbers and general instructions, readable (generated)
 supabase/schema.sql, supabase/README.md
 scripts/export_items.py, scripts/invitation_links.py, scripts/pull_ratings.py
 ```

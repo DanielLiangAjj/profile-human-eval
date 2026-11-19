@@ -4,7 +4,7 @@ import * as store from './storage.js';
 import * as sync from './sync.js';
 import * as api from './api.js';
 import { renderMarkdown } from './markdown.js';
-import { APP_VERSION, Session, minutesFor, formatMinutes, formatTotal, parseTrack, sheetsForTrack, describeTrack } from './state.js';
+import { APP_VERSION, Session, minutesFor, formatMinutes, formatTotal, parseTrack, sheetsForTrack } from './state.js';
 import { SHEET_UI, buildControls } from './controls.js';
 import { createPapersPanel, createTextsPanel } from './panels.js';
 
@@ -23,7 +23,10 @@ const DOT = {
   local: ['This browser only', 'No server is configured: answers are saved in this browser only.'],
 };
 
-let data = null;
+let data = null; // the opened items; null until the access phrase has been given
+let outline = null; // the public outline of the parts (data/outline.json): draws the start page while the items are closed
+let openItems = null; // async (typed phrase) => { data } or { error }; set when the page opened without a working phrase
+let linkPhraseWrong = false; // the link carried a phrase that does not open the items
 let session = null;
 let screen = { kind: 'loading' };
 let item = null; // the item screen's state while it is mounted
@@ -36,8 +39,13 @@ const byId = (a, b) => (a.id < b.id ? -1 : a.id > b.id ? 1 : 0);
 const capitalize = (s) => s.charAt(0).toUpperCase() + s.slice(1);
 const time = (iso) => Date.parse(iso) || 0;
 
-export function initUI(itemsData) {
+export function initUI(itemsData, closed = null) {
   data = itemsData;
+  if (closed) {
+    outline = closed.outline;
+    openItems = closed.open;
+    linkPhraseWrong = Boolean(closed.wrongLink);
+  }
   sync.onStatus((info) => { syncInfo = info; paintStatus(); });
   document.addEventListener('keydown', onKey);
 }
@@ -48,7 +56,7 @@ export function showFatal(message) {
   $('main').replaceChildren(h('section', { class: 'panel' }, h('h1', {}, 'Something went wrong'), h('p', {}, message)));
 }
 
-/** Shown when the page was opened without the access phrase of the invitation link (or with a wrong one). */
+/** Fallback when even the public outline cannot be loaded: only the access phrase is asked for. */
 export function showLocked({ wrong, submit }) {
   screen = { kind: 'locked' };
   $('topbar').hidden = true;
@@ -85,7 +93,31 @@ function urlTrack() { return parseTrack(new URLSearchParams(window.location.sear
 /** A link that opens the site on any device: it carries the access phrase after #, which is never sent to a server. */
 function resumeUrl() {
   const phrase = store.getPhrase();
-  return phrase ? `${siteUrl()}#k=${encodeURIComponent(phrase)}` : siteUrl();
+  const part = session && session.track ? `?t=${encodeURIComponent(session.track.text)}` : '';
+  return phrase ? `${siteUrl()}${part}#k=${encodeURIComponent(phrase)}` : `${siteUrl()}${part}`;
+}
+
+/**
+ * While the items are closed (the page was opened without the invitation link), a form also asks for the
+ * access phrase. open() returns an error message, or '' once the items are open.
+ */
+function phraseGate(id) {
+  if (data) return { field: null, open: async () => '' };
+  const input = h('input', { id, type: 'text', autocomplete: 'off', spellcheck: 'false', maxlength: 200 });
+  const field = h('label', { class: 'field field-wide' },
+    h('span', { class: 'field-label' }, 'Access phrase'),
+    input,
+    h('span', { class: 'field-hint' }, 'The link in your invitation fills this in for you. If you came here another way, paste the phrase from the invitation.'));
+  return {
+    field,
+    open: async () => {
+      if (data) return '';
+      const result = await openItems(input.value);
+      if (result.error) { input.focus(); return result.error; }
+      data = result.data;
+      return '';
+    },
+  };
 }
 
 function mailtoHref() {
@@ -207,7 +239,8 @@ function guideDetails(summary, md) {
 
 function sheetTable(sheets) {
   const totalMin = sheets.reduce((n, s) => n + minutesFor(s), 0);
-  const totalItems = sheets.reduce((n, s) => n + s.items.length, 0);
+  // both parts are about the same researchers, so the total counts each researcher once
+  const totalItems = new Set(sheets.flatMap((s) => s.items.map((it) => it.rank))).size;
   return h('table', { class: 'sheet-table' },
     h('thead', {}, h('tr', {}, h('th', {}, 'Part'), h('th', {}, 'What you judge'), h('th', { class: 'num' }, 'Researchers'), h('th', { class: 'num' }, 'Time'))),
     h('tbody', {}, sheets.map((s) => h('tr', {},
@@ -215,7 +248,7 @@ function sheetTable(sheets) {
       h('td', { class: 'num' }, s.items.length), h('td', { class: 'num' }, formatMinutes(minutesFor(s)))))),
     sheets.length > 1 ? h('tfoot', {}, h('tr', {},
       h('td', {}, 'In all'), h('td', {}, 'over as many sittings as you like'),
-      h('td', { class: 'num' }, totalItems), h('td', { class: 'num' }, formatTotal(totalMin)))) : null);
+      h('td', { class: 'num' }, totalItems), h('td', { class: 'num' }, formatMinutes(totalMin)))) : null);
 }
 
 // ---- welcome --------------------------------------------------------------------------------
@@ -228,28 +261,22 @@ export function showWelcome() {
   renderBanners();
   const current = store.getCurrent();
   const known = current && current.code && parseTrack(current.track) ? current : null;
-  const track = known ? parseTrack(known.track) : urlTrack();
-  const body = [];
-  if (track) {
-    body.push(sheetTable(sheetsForTrack(data, track)),
-      h('p', { class: 'muted' }, 'You can stop at any point and continue later; the times are for careful reading.'));
-  }
-  body.push(h('p', { class: 'consent' }, 'Your name and email are stored so we can credit and contact you; nothing else about you is collected.'));
-  if (known) body.push(continuePanel(known));
-  else if (track) body.push(startPanel(track), resumePanel());
-  else {
-    body.push(h('div', { class: 'warn-box' }, h('strong', {}, 'To start, open the link from your invitation. '),
-      'It tells this site which researchers are yours. If you have already started, enter your code below.'), resumePanel());
-  }
+  // The invitation link names the part (?t=p1 or ?t=p2). Without it, a new evaluator gets both parts, Part 1 first.
+  const track = known ? parseTrack(known.track) : (urlTrack() || parseTrack('all'));
+  // Before the access phrase is given, the public outline holds what this page shows (parts, numbers, instructions).
+  const shown = data || outline;
   $('main').replaceChildren(h('section', { class: 'welcome' },
     h('h1', {}, TITLE),
     h('p', { class: 'lede' }, PURPOSE),
-    guideDetails(GUIDE_TITLE, data.common_instructions),
-    body));
+    guideDetails(GUIDE_TITLE, shown.common_instructions),
+    sheetTable(sheetsForTrack(shown, track)),
+    h('p', { class: 'consent' }, 'Your name and email are stored so we can credit and contact you; nothing else about you is collected.'),
+    known ? continuePanel(known) : [startPanel(track), resumePanel()]));
   window.scrollTo(0, 0);
 }
 
 function continuePanel(cur) {
+  const gate = phraseGate('f-phrase');
   const err = h('p', { class: 'form-error', role: 'alert' });
   const label = `Continue as ${cur.name}`;
   const go = h('button', {
@@ -257,7 +284,7 @@ function continuePanel(cur) {
     onclick: async () => {
       go.disabled = true;
       go.textContent = 'Loading…';
-      const problem = await resume(cur.code);
+      const problem = (await gate.open()) || (await resume(cur.code));
       if (problem) { err.textContent = problem; go.disabled = false; go.textContent = label; }
     },
   }, label);
@@ -265,6 +292,7 @@ function continuePanel(cur) {
   return h('div', { class: 'panel' },
     h('h2', {}, 'Welcome back'),
     h('p', {}, 'This browser remembers you (code ', h('code', {}, cur.code), ').'),
+    gate.field ? h('div', { class: 'fields' }, gate.field) : null,
     h('div', { class: 'actions' }, go, other),
     err);
 }
@@ -272,25 +300,33 @@ function continuePanel(cur) {
 function startPanel(track) {
   const name = h('input', { id: 'f-name', type: 'text', autocomplete: 'name', maxlength: 80, required: true });
   const email = h('input', { id: 'f-email', type: 'email', autocomplete: 'email', maxlength: 254, required: true });
-  const err = h('p', { class: 'form-error', role: 'alert' });
+  const gate = phraseGate('f-phrase');
+  const err = h('p', { class: 'form-error', role: 'alert' },
+    !data && linkPhraseWrong ? 'The access phrase in this link does not open the profiles. Please paste the phrase from your invitation below.' : '');
+  const btn = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Start');
   return h('form', {
     class: 'panel', novalidate: true,
-    onsubmit: (event) => {
+    onsubmit: async (event) => {
       event.preventDefault();
       const n = name.value.trim().replace(/\s+/g, ' ');
       const m = email.value.trim();
       if (n.length < 2 || n.length > 80) { err.textContent = 'Please enter your full name (2 to 80 characters).'; name.focus(); return; }
       if (m.length > 254 || !EMAIL_RE.test(m)) { err.textContent = 'Please enter a valid email address.'; email.focus(); return; }
+      err.textContent = '';
+      btn.disabled = true;
+      const problem = await gate.open();
+      btn.disabled = false;
+      if (problem) { err.textContent = problem; return; }
       startNew(n, m, track);
     },
   },
   h('h2', {}, 'Start'),
-  h('p', { class: 'muted' }, `Your invitation: ${describeTrack(track)}.`),
   h('div', { class: 'fields' },
     h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Full name'), name),
     h('label', { class: 'field' }, h('span', { class: 'field-label' }, 'Email'), email)),
+  gate.field ? h('div', { class: 'fields' }, gate.field) : null,
   err,
-  h('div', { class: 'actions' }, h('button', { type: 'submit', class: 'btn btn-primary' }, 'Start')));
+  h('div', { class: 'actions' }, btn));
 }
 
 function normalizeCode(text) {
@@ -302,6 +338,7 @@ function resumePanel() {
     id: 'f-code', type: 'text', class: 'code-input', autocomplete: 'off', autocapitalize: 'characters',
     spellcheck: 'false', maxlength: 20, placeholder: 'for example 7K3QX9M2PA', 'aria-label': 'Your code',
   });
+  const gate = phraseGate('f-phrase-resume');
   const err = h('p', { class: 'form-error', role: 'alert' });
   const btn = h('button', { type: 'submit', class: 'btn' }, 'Resume');
   return h('form', {
@@ -313,12 +350,13 @@ function resumePanel() {
       err.textContent = '';
       btn.disabled = true;
       btn.textContent = 'Checking…';
-      const problem = await resume(code);
+      const problem = (await gate.open()) || (await resume(code));
       if (problem) { err.textContent = problem; btn.disabled = false; btn.textContent = 'Resume'; }
     },
   },
   h('h2', {}, 'Resume with a code'),
   h('p', { class: 'muted' }, 'Already started, here or on another device? Enter the code you were given.'),
+  gate.field ? h('div', { class: 'fields' }, gate.field) : null,
   h('div', { class: 'inline' }, input, btn),
   err);
 }
