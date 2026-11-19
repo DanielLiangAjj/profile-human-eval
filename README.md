@@ -91,7 +91,8 @@ the browser (all keys start with `profrate:`).
    the check of 18 Nov is in `supabase/README.md`. Run on 19 Nov 2026 (the four functions answer; the
    two tables are closed to the public key).
 2. **Settings.** Done 18 Nov 2026: `config.js` holds that project's URL and anon (publishable) key.
-3. **Publish.** Create the GitHub repository, push, and switch on Pages for the main branch (root).
+3. **Publish.** Done 19 Nov 2026: repository `DanielLiangAjj/profile-human-eval`, Pages on the main branch (root).
+   The site is at <https://danielliangajj.github.io/profile-human-eval/>.
 4. **Invite.** Print the links (above) and send them.
 
 Before step 4, open one link yourself, rate two researchers, check the rows in the `pr_ratings` table,
