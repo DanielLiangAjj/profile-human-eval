@@ -7,7 +7,8 @@
 //   profrate:queue                        operations still to send to the server, oldest first
 //   profrate:failed                       operations the server refused (kept for the record)
 //   profrate:done:<code>                  ISO time the evaluator reached the finish screen
-//   profrate:key                          the access phrase that opens the items (from the invitation link)
+//   profrate:key                          the key that opens the items (given by the server for the person's code, or the
+//                                         access phrase of an invitation link)
 
 const P = 'profrate:';
 const mem = new Map();

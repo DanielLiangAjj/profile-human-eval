@@ -1,5 +1,6 @@
 // Opens data/items.enc.json. The items (names, texts and paper titles of real people) are published only in
-// encrypted form; the access phrase comes with the invitation link (after #k=) and never leaves the browser.
+// encrypted form. The key (the access phrase) reaches the browser from the database once the person's code is
+// known there (supabase/access.sql), or with an invitation link (after #k=, which is never sent to a server).
 // Format written by scripts/export_items.py: PBKDF2-SHA256 -> AES-256-GCM over the gzip-compressed JSON.
 
 export class PhraseError extends Error {}

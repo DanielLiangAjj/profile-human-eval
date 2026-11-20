@@ -16,20 +16,38 @@ tables by a script.
 
 The site never shows which text is the self-written one; that key is not in this repository.
 
-## Why the items are encrypted
+## Why the items are encrypted, and how they open
 
 The items hold names, texts and paper titles of real people, and generated profiles that have not been
 released. This repository is public (GitHub Pages needs that on a free account), so it carries only
 `data/items.enc.json`: the items compressed and encrypted (AES-256-GCM, key derived from an access
 phrase with PBKDF2-SHA256). The phrase is kept in the paper folder
-(`human_eval/private/site_access_phrase.txt`), never in this repository. It reaches an evaluator inside
-the invitation link, after `#`; that part of an address is not sent to any server.
+(`human_eval/private/site_access_phrase.txt`), never in this repository.
+
+An evaluator never sees or types the phrase: **the personal code is enough** (decided 20 Nov 2026).
+The database keeps the phrase in a table that visitors cannot read (`pr_access`) and gives it to any
+code it knows (`supabase/access.sql`). So the items open when a person signs up with name and email, or
+enters their code under "Resume with a code"; the browser then remembers the key.
+
+- What this keeps: the texts cannot be read in the repository or found by a search engine, and everyone
+  who opens them has left a name, an e-mail address and a time in `pr_evaluators`.
+- What it does not keep: sign-up is open, so anyone who signs up can read the texts of the 40
+  researchers.
+- To close the profiles again, for example when the rating is over, delete the key from the database
+  (one line, given at the top of `supabase/access.sql`).
+
+Setting it up, once: `python3 scripts/make_access_sql.py` writes `human_eval/private/access_setup.sql`
+in the paper folder (the content of `supabase/access.sql` plus one statement that stores the phrase).
+Paste that file into the Supabase SQL editor and press Run. Until that has been done, and whenever the
+key is deleted again, the site asks for the phrase instead: the Start and Resume forms get one more
+field, "Access phrase", and a link that carries the phrase after `#k=` fills it in
+(`scripts/invitation_links.py --with-phrase`; the part of an address after `#` is not sent to any
+server). The site finds out by itself which of the two is the case (it asks `pr_access_ready`).
 
 The start page is the same however the site is opened: what the study is, how to judge, the parts with
-their times, **Start** (name and email) and **Resume with a code**. Someone who opens the bare address,
-without the link, sees that page too, drawn from `data/outline.json` (part titles, numbers and the
-general instructions; nothing about any person). The Start and Resume forms then have one more field,
-the access phrase, and no researcher is shown until it is given.
+their times, **Start** (name and email) and **Resume with a code**. It is drawn from
+`data/outline.json` (part titles, numbers and the general instructions; nothing about any person), so
+no researcher is shown before the items are open.
 
 ## The researchers and the invitation links
 
@@ -52,7 +70,9 @@ python3 scripts/invitation_links.py --base https://<account>.github.io/profile-h
 | `all` | both parts, Part 1 first. Also what a new evaluator gets who signs up without a part in the address. |
 | `p1-1of2`, `p2-2of3`, ... | one of N equal, school-balanced shares of the 40 (up to 6). Not used in the agreed design. |
 
-The printed links contain the access phrase: send them only to the evaluators.
+The links carry no secret: they are the site's address plus the part. (With `--with-phrase` they also
+carry the access phrase after `#`, for a database where `supabase/access.sql` has not been run; such
+links go only to the evaluators.)
 
 Each evaluator sees the researchers in an order seeded by their own code. Once an evaluator has begun
 Part 2, Part 1 can no longer be changed (Back stays inside a part), so the unblinded part cannot
@@ -78,11 +98,12 @@ figure can be reported.
 ```
 cd profile-human-eval
 python3 -m http.server 8000
-python3 scripts/invitation_links.py --base http://localhost:8000/ p1           # prints the link to open
+python3 scripts/invitation_links.py --with-phrase --base http://localhost:8000/ p1   # prints the link to open
 ```
 
 On this computer the site runs in **local-only mode**: `config.local.js` (git-ignored, never published)
-holds empty values, and a value in that file wins over `config.js`, also when it is empty. Everything
+holds empty values, and a value in that file wins over `config.js`, also when it is empty. There is no
+database to give out the key, which is why the local link carries the phrase. Everything
 works, answers stay in the browser's localStorage, a yellow banner says so, and the finish screen insists
 on downloading the answers as JSON; nothing is written to the shared database. Delete `config.local.js`
 to test the local copy against the real database. To start over as a tester, clear the site's storage in
@@ -98,9 +119,12 @@ the browser (all keys start with `profrate:`).
 2. **Settings.** Done 18 Nov 2026: `config.js` holds that project's URL and anon (publishable) key.
 3. **Publish.** Done 19 Nov 2026: repository `DanielLiangAjj/profile-human-eval`, Pages on the main branch (root).
    The site is at <https://danielliangajj.github.io/profile-human-eval/>.
-4. **Invite.** Print the links (above) and send them.
+4. **Let the code open the profiles.** Paste `human_eval/private/access_setup.sql` (paper folder) into
+   the SQL editor and run it; it should end with one row saying `true` (see "Why the items are
+   encrypted, and how they open"). Until then the site asks for the access phrase.
+5. **Invite.** Print the links (above) and send them.
 
-Before step 4, open one link yourself, rate two researchers, check the rows in the `pr_ratings` table,
+Before step 5, open one link yourself, rate two researchers, check the rows in the `pr_ratings` table,
 and delete the test rows (or leave them and pass `--drop <code>` when pulling).
 
 ## Rebuild the items
@@ -152,11 +176,11 @@ Item ids are the item numbers of the kit (`R001` to `R120`); 40 of them are on t
 
 ```
 index.html, 404.html, config.js        page shell, deep-link redirect, Supabase settings (public)
-assets/app.js                          entry: settings, access phrase, items, first screen
-assets/views.js                        screens and flow (access phrase, welcome, intro, item, pause, finish)
+assets/app.js                          entry: settings, how the items open, first screen
+assets/views.js                        screens and flow (welcome with start and resume, intro, item, pause, finish)
 assets/controls.js                     scales and buttons, validity and answer JSON per sheet
 assets/panels.js                       the paper list and the two text cards
-assets/crypto.js                       opens data/items.enc.json with the access phrase
+assets/crypto.js                       opens data/items.enc.json with its key (the access phrase)
 assets/state.js, storage.js,           tracks, session and item order, localStorage, save queue with
   sync.js, api.js, prng.js,            retries, Supabase RPC calls, seeded shuffle, guide markdown
   markdown.js, dom.js
@@ -164,5 +188,7 @@ assets/style.css
 data/items.enc.json                    the items, encrypted (generated)
 data/outline.json                      part titles, numbers and general instructions, readable (generated)
 supabase/schema.sql, supabase/README.md
+supabase/access.sql                    lets a personal code open the items (the key itself is not in it)
 scripts/export_items.py, scripts/invitation_links.py, scripts/pull_ratings.py
+scripts/make_access_sql.py             writes the private file that stores the key in the database
 ```

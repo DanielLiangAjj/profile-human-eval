@@ -1,4 +1,4 @@
-// Supabase calls. The site talks to four Postgres functions through PostgREST
+// Supabase calls. The site talks to a handful of Postgres functions through PostgREST
 // (POST {SUPABASE_URL}/rest/v1/rpc/<function>); there is no Supabase JS library.
 // Each call below is a plain async function, so it can be exercised on its own, e.g. in the console:
 //   const api = await import('./assets/api.js'); api.configure(url, key); await api.getProgress('ABCDEFGHJK');
@@ -80,4 +80,16 @@ export function getProgress(code) {
 
 export function finishEvaluation(code) {
   return rpc('pr_finish_evaluation', { p_code: code });
+}
+
+// The two functions of supabase/access.sql. They exist only when that file has been run.
+
+/** True when the database keeps the key of the items, so that a code is enough to open them. */
+export function accessReady() {
+  return rpc('pr_access_ready', {}, { timeoutMs: 8000 });
+}
+
+/** The key of the items for a code the server knows, or null for an unknown code. */
+export function getAccess(code) {
+  return rpc('pr_get_access', { p_code: code });
 }

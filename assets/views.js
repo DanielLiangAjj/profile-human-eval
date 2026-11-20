@@ -1,4 +1,4 @@
-// Screens and flow: access phrase, welcome, sheet intro, item, pause and finish.
+// Screens and flow: welcome (start, resume), sheet intro, item, pause and finish.
 import { h } from './dom.js';
 import * as store from './storage.js';
 import * as sync from './sync.js';
@@ -23,9 +23,10 @@ const DOT = {
   local: ['This browser only', 'No server is configured: answers are saved in this browser only.'],
 };
 
-let data = null; // the opened items; null until the access phrase has been given
+let data = null; // the opened items; null while this browser does not have their key yet
 let outline = null; // the public outline of the parts (data/outline.json): draws the start page while the items are closed
-let openItems = null; // async (typed phrase) => { data } or { error }; set when the page opened without a working phrase
+let openItems = null; // async (key) => { data }, { wrong: true } or { failed: true }; set while the items are closed
+let serverGate = false; // the database gives the key to a code it knows (supabase/access.sql): nobody is asked for a phrase
 let linkPhraseWrong = false; // the link carried a phrase that does not open the items
 let session = null;
 let screen = { kind: 'loading' };
@@ -45,10 +46,14 @@ export function initUI(itemsData, closed = null) {
     outline = closed.outline;
     openItems = closed.open;
     linkPhraseWrong = Boolean(closed.wrongLink);
+    serverGate = Boolean(closed.serverGate);
   }
   sync.onStatus((info) => { syncInfo = info; paintStatus(); });
   document.addEventListener('keydown', onKey);
 }
+
+/** Called when the server has said whether a code is enough to open the items. */
+export function setServerGate(on) { serverGate = Boolean(on); }
 
 export function showFatal(message) {
   $('topbar').hidden = true;
@@ -90,19 +95,63 @@ function siteUrl() { return new URL('.', window.location.href).href; }
 /** The track named in the page address (?t=...), or null. */
 function urlTrack() { return parseTrack(new URLSearchParams(window.location.search).get('t')); }
 
-/** A link that opens the site on any device: it carries the access phrase after #, which is never sent to a server. */
+/**
+ * The address to continue from on any device. Where the code alone opens the items it is just the site; otherwise
+ * it carries the access phrase after #, which is never sent to a server.
+ */
 function resumeUrl() {
-  const phrase = store.getPhrase();
+  const phrase = serverGate ? '' : store.getPhrase();
   const part = session && session.track ? `?t=${encodeURIComponent(session.track.text)}` : '';
   return phrase ? `${siteUrl()}${part}#k=${encodeURIComponent(phrase)}` : `${siteUrl()}${part}`;
 }
 
+const UNREACHABLE = "Can't reach the server right now. Check your connection and try again in a minute.";
+const LOAD_FAILED = 'The profiles could not be loaded. Check your connection and try again.';
+const NOT_OPENED = 'The profiles could not be opened. Please write to the person who invited you.';
+
+const registerCall = (code, who) => api.registerEvaluator({
+  code, name: who.name, email: who.email, track: who.track, userAgent: navigator.userAgent.slice(0, 500),
+});
+
 /**
- * While the items are closed (the page was opened without the invitation link), a form also asks for the
- * access phrase. open() returns an error message, or '' once the items are open.
+ * Open the items with the key the database gives to a code it knows. For a new evaluator (who is given) the
+ * sign-up is sent first. Returns an error message, or '' once the items are open.
  */
-function phraseGate(id) {
+async function openForCode(code, who) {
+  let key;
+  try {
+    if (who) await registerCall(code, who);
+    key = await api.getAccess(code);
+    if (!key && !who) {
+      // The server has never seen this code but this browser has (for example the database was reset): sign it up again.
+      const local = store.getIdentity(code);
+      if (local && parseTrack(local.track)) {
+        await registerCall(code, local);
+        key = await api.getAccess(code);
+      }
+    }
+  } catch (err) {
+    if (err && err.retryable === false) {
+      return who ? 'The server did not accept the sign-up. Please check your name and email.' : 'The server did not accept this code. Please check it and try again.';
+    }
+    return UNREACHABLE;
+  }
+  if (!key) return who ? NOT_OPENED : 'We could not find this code. Check it for typos, or start as a new evaluator.';
+  const result = await openItems(key);
+  if (result.failed) return LOAD_FAILED;
+  if (!result.data) return NOT_OPENED;
+  data = result.data;
+  return '';
+}
+
+/**
+ * What a form needs while the items are still closed. open({ code, who }) returns an error message, or '' once
+ * the items are open. Where the database gives the key to a code it knows, the form shows nothing extra;
+ * otherwise it gets a field for the access phrase.
+ */
+function itemsGate(id) {
   if (data) return { field: null, open: async () => '' };
+  if (serverGate) return { field: null, open: async ({ code, who = null }) => (data ? '' : openForCode(code, who)) };
   const input = h('input', { id, type: 'text', autocomplete: 'off', spellcheck: 'false', maxlength: 200 });
   const field = h('label', { class: 'field field-wide' },
     h('span', { class: 'field-label' }, 'Access phrase'),
@@ -112,10 +161,11 @@ function phraseGate(id) {
     field,
     open: async () => {
       if (data) return '';
+      if (!input.value.trim()) { input.focus(); return 'Please enter the access phrase from your invitation, or open the link in the invitation.'; }
       const result = await openItems(input.value);
-      if (result.error) { input.focus(); return result.error; }
-      data = result.data;
-      return '';
+      if (result.data) { data = result.data; return ''; }
+      input.focus();
+      return result.failed ? LOAD_FAILED : 'This phrase does not open the profiles. Copy it again from your invitation, or use the link there.';
     },
   };
 }
@@ -263,7 +313,7 @@ export function showWelcome() {
   const known = current && current.code && parseTrack(current.track) ? current : null;
   // The invitation link names the part (?t=p1 or ?t=p2). Without it, a new evaluator gets both parts, Part 1 first.
   const track = known ? parseTrack(known.track) : (urlTrack() || parseTrack('all'));
-  // Before the access phrase is given, the public outline holds what this page shows (parts, numbers, instructions).
+  // While the items are closed, the public outline holds what this page shows (parts, numbers, instructions).
   const shown = data || outline;
   $('main').replaceChildren(h('section', { class: 'welcome' },
     h('h1', {}, TITLE),
@@ -276,7 +326,7 @@ export function showWelcome() {
 }
 
 function continuePanel(cur) {
-  const gate = phraseGate('f-phrase');
+  const gate = itemsGate('f-phrase');
   const err = h('p', { class: 'form-error', role: 'alert' });
   const label = `Continue as ${cur.name}`;
   const go = h('button', {
@@ -284,7 +334,7 @@ function continuePanel(cur) {
     onclick: async () => {
       go.disabled = true;
       go.textContent = 'Loading…';
-      const problem = (await gate.open()) || (await resume(cur.code));
+      const problem = (await gate.open({ code: cur.code })) || (await resume(cur.code));
       if (problem) { err.textContent = problem; go.disabled = false; go.textContent = label; }
     },
   }, label);
@@ -300,10 +350,12 @@ function continuePanel(cur) {
 function startPanel(track) {
   const name = h('input', { id: 'f-name', type: 'text', autocomplete: 'name', maxlength: 80, required: true });
   const email = h('input', { id: 'f-email', type: 'email', autocomplete: 'email', maxlength: 254, required: true });
-  const gate = phraseGate('f-phrase');
+  const gate = itemsGate('f-phrase');
   const err = h('p', { class: 'form-error', role: 'alert' },
-    !data && linkPhraseWrong ? 'The access phrase in this link does not open the profiles. Please paste the phrase from your invitation below.' : '');
+    gate.field && linkPhraseWrong ? 'The access phrase in this link does not open the profiles. Please paste the phrase from your invitation below.' : '');
   const btn = h('button', { type: 'submit', class: 'btn btn-primary' }, 'Start');
+  // Where the sign-up itself opens the items, the same code is used again if the person has to press Start twice.
+  let pendingCode = null;
   return h('form', {
     class: 'panel', novalidate: true,
     onsubmit: async (event) => {
@@ -314,10 +366,15 @@ function startPanel(track) {
       if (m.length > 254 || !EMAIL_RE.test(m)) { err.textContent = 'Please enter a valid email address.'; email.focus(); return; }
       err.textContent = '';
       btn.disabled = true;
-      const problem = await gate.open();
+      btn.textContent = 'Starting…';
+      const viaServer = !data && serverGate;
+      if (viaServer && !pendingCode) pendingCode = newCode();
+      const problem = await gate.open({ code: pendingCode, who: { name: n, email: m, track: track.text } });
       btn.disabled = false;
+      btn.textContent = 'Start';
       if (problem) { err.textContent = problem; return; }
-      startNew(n, m, track);
+      if (viaServer) startNew(n, m, track, pendingCode, true);
+      else startNew(n, m, track);
     },
   },
   h('h2', {}, 'Start'),
@@ -338,7 +395,7 @@ function resumePanel() {
     id: 'f-code', type: 'text', class: 'code-input', autocomplete: 'off', autocapitalize: 'characters',
     spellcheck: 'false', maxlength: 20, placeholder: 'for example 7K3QX9M2PA', 'aria-label': 'Your code',
   });
-  const gate = phraseGate('f-phrase-resume');
+  const gate = itemsGate('f-phrase-resume');
   const err = h('p', { class: 'form-error', role: 'alert' });
   const btn = h('button', { type: 'submit', class: 'btn' }, 'Resume');
   return h('form', {
@@ -350,7 +407,7 @@ function resumePanel() {
       err.textContent = '';
       btn.disabled = true;
       btn.textContent = 'Checking…';
-      const problem = (await gate.open()) || (await resume(code));
+      const problem = (await gate.open({ code })) || (await resume(code));
       if (problem) { err.textContent = problem; btn.disabled = false; btn.textContent = 'Resume'; }
     },
   },
@@ -375,12 +432,12 @@ const ratingOp = (code, sheet, itemId, rec) => ({
   elapsed_ms: rec.elapsed_ms ?? null, client_ts: rec.client_ts, app_version: rec.app_version || APP_VERSION,
 });
 
-function startNew(name, email, track) {
-  const code = newCode();
+/** Begin as a new evaluator. `registered` says the sign-up has already reached the server (it opened the items). */
+function startNew(name, email, track, code = newCode(), registered = false) {
   const who = { name, email, track: track.text };
   store.setIdentity(code, who);
   store.setCurrent({ code, ...who });
-  sync.enqueue(registerOp(code, who));
+  if (!registered) sync.enqueue(registerOp(code, who));
   session = new Session(data, code, who, new Map());
   session.serverCompleted = false;
   downloaded = false;

@@ -1,12 +1,14 @@
-// Entry point: read the Supabase settings, open the items with the access phrase when the link carries it,
-// then show the start page (which asks for the phrase itself when the items are still closed).
+// Entry point: read the Supabase settings, open the items when this browser already has their key, then show
+// the start page. While the items are closed, the start page opens them when a person signs up or enters
+// a code: the database gives the key to a code it knows (supabase/access.sql). Where that is not set up,
+// the forms ask for the access phrase instead.
 import * as config from '../config.js';
 import * as api from './api.js';
 import * as sync from './sync.js';
 import * as store from './storage.js';
 import { loadItems, loadOutline } from './state.js';
 import { PhraseError, normalizePhrase } from './crypto.js';
-import { initUI, showWelcome, showFatal, showLocked } from './views.js';
+import { initUI, setServerGate, showWelcome, showFatal, showLocked } from './views.js';
 
 async function loadConfig() {
   let url = config.SUPABASE_URL || '';
@@ -26,7 +28,22 @@ async function loadConfig() {
   return { url, key };
 }
 
-/** The access phrase of the invitation link: .../?t=p1-1of2#k=<phrase>. The fragment is never sent to a server. */
+/**
+ * Who gives the browser the key of the items: 'server' when the database gives it to a code it knows
+ * (supabase/access.sql has been run and the key is stored there), otherwise 'phrase' (the person supplies it).
+ */
+async function probeGate() {
+  if (!api.configured()) return 'phrase';
+  try {
+    return (await api.accessReady()) === true ? 'server' : 'phrase';
+  } catch (err) {
+    // 404: the database does not have the functions of supabase/access.sql. Anything else: the server could not
+    // be asked just now; the forms then report the connection problem when they are sent.
+    return err && err.status === 404 ? 'phrase' : 'server';
+  }
+}
+
+/** An access phrase carried by the link (.../?t=p1#k=<phrase>), as older invitations have it. The fragment is never sent to a server. */
 function phraseFromUrl() {
   const m = /(?:^#|&)k=([^&]*)/.exec(window.location.hash);
   if (!m) return '';
@@ -45,15 +62,10 @@ async function tryOpen(phrase) {
   }
 }
 
-function begin(data) {
-  initUI(data);
-  sync.start();
-  showWelcome();
-}
-
 async function main() {
   const { url, key } = await loadConfig();
   api.configure(url, key);
+  const gateProbe = probeGate();
   const candidates = [...new Set([phraseFromUrl(), store.getPhrase()].filter(Boolean))];
   const loadFailed = 'The items could not be loaded. Check your connection and reload the page.';
   let data = null;
@@ -66,34 +78,48 @@ async function main() {
     showFatal(loadFailed);
     return;
   }
-  if (data) { begin(data); return; }
+  if (data) {
+    // This browser already has the key. The answer of the probe only decides whether the "continue on another
+    // device" link still has to carry the phrase, so the page does not wait for it.
+    initUI(data);
+    gateProbe.then((gate) => setServerGate(gate === 'server'));
+    sync.start();
+    showWelcome();
+    return;
+  }
 
-  // Opened without the invitation link (or with a phrase that does not fit): show the same start page from the
-  // public outline. The Start and Resume forms then also ask for the access phrase, and open the items with it.
-  const open = async (typed) => {
-    const phrase = normalizePhrase(typed);
-    if (!phrase) return { error: 'Please enter the access phrase from your invitation, or open the link in the invitation.' };
-    let opened;
-    try { opened = await tryOpen(phrase); } catch { return { error: loadFailed }; }
-    if (!opened) return { error: 'This phrase does not open the profiles. Copy it again from your invitation, or use the link there.' };
-    return { data: opened };
+  // The items are still closed: draw the same start page from the public outline. The Start and Resume forms open
+  // the items: with the key the database gives to the person's code, or else with the access phrase they type.
+  // open() returns { data }, { wrong: true } for a key that does not fit, or { failed: true } when the file did not load.
+  const open = async (text) => {
+    const phrase = normalizePhrase(text);
+    if (!phrase) return { wrong: true };
+    try {
+      const opened = await tryOpen(phrase);
+      return opened ? { data: opened } : { wrong: true };
+    } catch {
+      return { failed: true };
+    }
   };
-  let outline = null;
-  try { outline = await loadOutline(); } catch { outline = null; }
+  const [gate, outline] = await Promise.all([gateProbe, loadOutline().catch(() => null)]);
   if (!outline) {
     showLocked({
       wrong: candidates.length > 0,
       // Returns an error message, or null once the site has started.
       submit: async (typed) => {
+        if (!normalizePhrase(typed)) return 'Please enter the access phrase from your invitation.';
         const result = await open(typed);
-        if (result.error) return result.error;
-        begin(result.data);
+        if (result.failed) return loadFailed;
+        if (!result.data) return 'This phrase does not open the profiles. Copy it again from your invitation.';
+        initUI(result.data);
+        sync.start();
+        showWelcome();
         return null;
       },
     });
     return;
   }
-  initUI(null, { outline, open, wrongLink: candidates.length > 0 });
+  initUI(null, { outline, open, wrongLink: candidates.length > 0, serverGate: gate === 'server' });
   sync.start();
   showWelcome();
 }
