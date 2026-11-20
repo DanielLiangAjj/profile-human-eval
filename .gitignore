@@ -4,6 +4,3 @@ config.local.js
 __pycache__/
 *.pyc
 node_modules/
-# plain items never belong in this repository; only data/items.enc.json is published
-data/items.json
-data/*.plain.json

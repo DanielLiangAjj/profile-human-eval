@@ -1,14 +1,13 @@
 #!/usr/bin/env python3
-"""Build data/items.enc.json for the rating site from the blinded rating kit of the paper project.
+"""Build data/items.json for the rating site from the blinded rating kit of the paper project.
 
 The kit (human_eval/rating_sheet.xlsx + human_eval/private/rating_key.csv in the paper folder) holds 120 drawn
 researchers and fixes which text is shown as A and which as B. The site carries a fixed share of them: by default
 one of three school-balanced thirds, 40 researchers, and every evaluator rates all 40 (decided 17 Nov 2026: one
 common set, and no more than about two hours per evaluator). This script rebuilds every item from the source
-files, checks all 120 cell by cell against the kit's sheet, keeps the share, and writes the items ENCRYPTED: they hold names,
-texts and paper titles of real people and generated profiles that have not been released, so the public
-repository carries only ciphertext. The access phrase is kept in the paper folder (human_eval/private/, never
-committed) and travels to evaluators in the invitation link (see scripts/invitation_links.py).
+files, checks all 120 cell by cell against the kit's sheet, keeps the share, and writes the items as one
+readable JSON file, as the outcome taxonomy rating site does (decided 20 Nov 2026; until then the file was
+published encrypted).
 
   python3 scripts/export_items.py [--paper ~/Dropbox/medschool-navigator-paper] [--tag gpt-6.1-sol] [--share 1of3]
 
@@ -21,14 +20,15 @@ human_eval/rating_guide.md; and a rank per researcher, which could share them ou
 (track "p1-1of2" = researchers whose rank is even, and so on), each school in proportion. With the common set
 every evaluator gets the plain tracks: p1 (Part 1) or p2 (Part 2).
 
-Needs the packages cryptography and openpyxl (both in the Anaconda base environment).
+The file is public, so the script refuses to write anything that would say which text is the self-written one.
+That key (human_eval/private/rating_key.csv) stays in the paper folder.
+
+Needs the package openpyxl (in the Anaconda base environment).
 """
-import argparse, base64, collections, csv, datetime, gzip, json, os, random, re, secrets, sys
+import argparse, collections, csv, datetime, json, os, random, re, sys
 
 HERE = os.path.dirname(os.path.abspath(__file__))
 SITE = os.path.dirname(HERE)
-ITERATIONS = 310000
-PHRASE_ALPHABET = "abcdefghjkmnpqrstuvwxyz23456789"      # no i, l, o, 0, 1
 RANK_SEED = 20261117
 PAPERS_KEPT, PAPERS_IN_KIT = 50, 15
 
@@ -47,30 +47,6 @@ def guide_sections(path):
     return {k: "\n".join(v).strip() for k, v in out.items()}
 
 
-def write_outline(data, path):
-    """The public outline of the parts: titles, the researchers' ranks (plain numbers) and the general instructions.
-    The site draws its start page from it before the access phrase is given, so it must hold nothing about a person."""
-    outline = {"format": "profile-rating-outline/1", "built": data["version"], "common_instructions": data["common_instructions"],
-               "sheets": [{"id": s["id"], "title": s["title"], "short": s["short"], "ranks": sorted(it["rank"] for it in s["items"])}
-                          for s in data["sheets"]]}
-    text = json.dumps(outline, ensure_ascii=False)
-    for p in data["people"].values():
-        if p["name"] in text or (p.get("school") and p["school"] in text): fail("the outline would name a person or a school")
-    for s in outline["sheets"]:
-        if not all(isinstance(r, int) for r in s["ranks"]): fail("ranks must be plain numbers")
-    with open(path, "w", encoding="utf-8") as f: f.write(text + "\n")
-    return outline
-
-
-def open_box(path, phrase):
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    box = json.load(open(path, encoding="utf-8"))
-    k256 = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=base64.b64decode(box["salt"]), iterations=box["iterations"]).derive(phrase.encode("utf-8"))
-    return json.loads(gzip.decompress(AESGCM(k256).decrypt(base64.b64decode(box["iv"]), base64.b64decode(box["ciphertext"]), None)))
-
-
 def norm(s):
     """Comparison form: Excel drops control characters and normalises line ends."""
     return re.sub(r"\s+", " ", re.sub(r"[\x00-\x08\x0b\x0c\x0e-\x1f]", "", str(s or ""))).strip()
@@ -80,23 +56,13 @@ def main():
     ap = argparse.ArgumentParser()
     ap.add_argument("--paper", default="~/Dropbox/medschool-navigator-paper")
     ap.add_argument("--tag", default="gpt-6.1-sol")
-    ap.add_argument("--out", default=os.path.join(SITE, "data", "items.enc.json"))
-    ap.add_argument("--phrase-file", default=None, help="default: <paper>/human_eval/private/site_access_phrase.txt")
+    ap.add_argument("--out", default=os.path.join(SITE, "data", "items.json"))
     ap.add_argument("--share", default="1of3", help="which school-balanced share of the kit's researchers goes on the site, KofN "
                     "(default 1of3 = 40 of 120; 1of1 = all)")
-    ap.add_argument("--outline-only", action="store_true", help="do not rebuild the items: open the published file with the access "
-                    "phrase and write only data/outline.json from it")
     a = ap.parse_args()
-    outline_path = os.path.join(os.path.dirname(os.path.abspath(a.out)), "outline.json")
     paper = os.path.realpath(os.path.expanduser(a.paper))
     kit = os.path.join(paper, "human_eval")
     base = os.path.expanduser(f"~/.cache/medschool-navigator/metrics_input/{a.tag}")
-    phrase_file = os.path.expanduser(a.phrase_file) if a.phrase_file else os.path.join(kit, "private", "site_access_phrase.txt")
-    if a.outline_only:
-        o = write_outline(open_box(a.out, "".join(open(phrase_file, encoding="utf-8").read().split())), outline_path)
-        print("outline of the published items -> " + os.path.relpath(outline_path, SITE) + ": "
-              + "; ".join(f"{s['title']}, {len(s['ranks'])} researchers" for s in o["sheets"]))
-        return
 
     key = list(csv.DictReader(open(os.path.join(kit, "private", "rating_key.csv"), encoding="utf-8")))
     mach = {}
@@ -176,34 +142,9 @@ def main():
     for bad in ("self_written", "a_is_human", "profile_url", "generated_words"):
         if bad.encode() in plain: fail(f"the items contain '{bad}'")
 
-    if os.path.exists(phrase_file):
-        phrase = "".join(open(phrase_file, encoding="utf-8").read().split())
-        if len(phrase) < 16: fail("the access phrase file holds fewer than 16 characters")
-        made = False
-    else:
-        phrase = "".join(secrets.choice(PHRASE_ALPHABET) for _ in range(24)); made = True
-        os.makedirs(os.path.dirname(phrase_file), exist_ok=True)
-        fd = os.open(phrase_file, os.O_WRONLY | os.O_CREAT | os.O_EXCL, 0o600)
-        with os.fdopen(fd, "w", encoding="utf-8") as f: f.write(phrase + "\n")
-
-    from cryptography.hazmat.primitives import hashes
-    from cryptography.hazmat.primitives.ciphers.aead import AESGCM
-    from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
-    salt, iv = secrets.token_bytes(16), secrets.token_bytes(12)
-    k256 = PBKDF2HMAC(algorithm=hashes.SHA256(), length=32, salt=salt, iterations=ITERATIONS).derive(phrase.encode("utf-8"))
-    packed = gzip.compress(plain, compresslevel=9, mtime=0)
-    ct = AESGCM(k256).encrypt(iv, packed, None)
-    b64 = lambda b: base64.b64encode(b).decode("ascii")
-    box = {"format": "profile-rating-items/1", "built": data["version"], "kdf": "PBKDF2-SHA256", "iterations": ITERATIONS, "cipher": "AES-256-GCM",
-           "compression": "gzip", "salt": b64(salt), "iv": b64(iv), "ciphertext": b64(ct)}
     os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
-    with open(a.out, "w", encoding="utf-8") as f: json.dump(box, f)
-    # round trip, and a last look that no name is readable in the published file
-    back = json.loads(gzip.decompress(AESGCM(k256).decrypt(iv, base64.b64decode(box["ciphertext"]), None)))
-    assert back == data
-    published = open(a.out, encoding="utf-8").read()
-    assert not any(p["name"] in published for p in people.values())
-    write_outline(data, outline_path)
+    with open(a.out, "wb") as f: f.write(plain + b"\n")
+    assert json.load(open(a.out, encoding="utf-8")) == data
     per_school = collections.Counter(p["school"] for p in people.values())
     as_a = sum(key_by_rid[rid]["self_written_is"] == "A" for rid in kept)
     import statistics
@@ -213,8 +154,7 @@ def main():
     print(f"self-written text shown as A for {as_a} of {len(kept)}; median words self-written {med([int(key_by_rid[r]['self_written_words']) for r in kept])}, "
           f"generated {med([int(key_by_rid[r]['generated_words']) for r in kept])}; papers kept per person: median {med([len(p['papers']) for p in people.values()])}, "
           f"{sum(1 for p in people.values() if p['n_papers'] > PAPERS_IN_KIT)} have more than {PAPERS_IN_KIT}")
-    print(f"plain {len(plain):,} bytes, published {os.path.getsize(a.out):,} bytes -> {os.path.relpath(a.out, SITE)}; list of the researchers -> human_eval/private/rating_set.csv")
-    print(f"access phrase: {'created' if made else 'read from'} {phrase_file} (not shown; scripts/invitation_links.py prints the links)")
+    print(f"{os.path.getsize(a.out):,} bytes -> {os.path.relpath(a.out, SITE)}; list of the researchers -> human_eval/private/rating_set.csv")
 
 
 if __name__ == "__main__":

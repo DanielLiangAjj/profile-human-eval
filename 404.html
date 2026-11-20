@@ -9,7 +9,7 @@
 <script>
   // A stale deep link lands here; send it to the start page of the site.
   // On GitHub Pages the site lives under /<repository>/, so keep that first path segment.
-  // The query string and the fragment are kept: they carry the invitation (item set and access phrase).
+  // The query string is kept: it names the part of the invitation (?t=p1 or ?t=p2).
   (function () {
     var parts = location.pathname.split('/').filter(Boolean);
     var base = /\.github\.io$/.test(location.hostname) && parts.length ? '/' + parts[0] + '/' : '/';

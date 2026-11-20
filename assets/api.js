@@ -81,15 +81,3 @@ export function getProgress(code) {
 export function finishEvaluation(code) {
   return rpc('pr_finish_evaluation', { p_code: code });
 }
-
-// The two functions of supabase/access.sql. They exist only when that file has been run.
-
-/** True when the database keeps the key of the items, so that a code is enough to open them. */
-export function accessReady() {
-  return rpc('pr_access_ready', {}, { timeoutMs: 8000 });
-}
-
-/** The key of the items for a code the server knows, or null for an unknown code. */
-export function getAccess(code) {
-  return rpc('pr_get_access', { p_code: code });
-}

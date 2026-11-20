@@ -47,37 +47,12 @@ list of functions; the other two sites' schemas end with the same line.
    GitHub Pages redeploys within a minute or two; the yellow banner disappears and the dot in the
    header turns green after the first saved answer.
 
-## Letting the personal code open the profiles (`access.sql`)
-
-The profiles are published only in encrypted form. So that evaluators need no access phrase, the
-database keeps the key and gives it to any code it knows:
-
-1. `python3 scripts/make_access_sql.py` writes `human_eval/private/access_setup.sql` in the paper
-   folder: the content of `supabase/access.sql` plus the one statement that stores the key. The file
-   holds the key, so it stays outside this repository.
-2. Paste that file into the SQL editor and press *Run*. The result should be one row,
-   `code_opens_the_profiles = true`.
-
-It adds one table (`pr_access`, closed to the public key like the other two) and two functions:
-`pr_access_ready` (is a key stored?) and `pr_get_access` (the key, for a code that has signed up; null
-for any other code). Nothing that exists is changed; the file was tested on a throwaway local database
-next to the taxonomy schema and this site's schema (20 Nov 2026: the public role can call the two
-functions and can neither read nor change the table; running the file again keeps the key).
-
-Sign-up is open, so this protects the texts from being read in the repository or found by a search
-engine, not from a person who signs up. To close the profiles again:
-`delete from public.pr_access where name = 'items_phrase';` From then on the site asks for the access
-phrase, as it does in a database where the file has not been run.
-
 ## Is it safe to publish the anon key?
-
-(The access phrase of the items is a different thing and is never published; see the main README.)
 
 Yes. The anon key is designed to be public: it is shipped to every visitor's browser anyway, and it
 only identifies the project. What it can do is decided by the database. Here row-level security is on
 for the tables with no policies, and the table privileges are revoked from `anon`, so the key cannot
-read or write any row directly. The four `security definer` functions in `schema.sql` (and the two in
-`access.sql`) are the only door: they accept one evaluator's code, check every input (code format, track, sheet name, item id,
+read or write any row directly. The four `security definer` functions in `schema.sql` are the only door: they accept one evaluator's code, check every input (code format, track, sheet name, item id,
 answer size, name and email length), and `pr_get_progress` returns only the rows of the code it is given.
 A code is 10 random characters (about 50 bits), so codes cannot be guessed.
 

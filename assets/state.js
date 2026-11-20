@@ -2,7 +2,6 @@
 // answers and progress.
 
 import { seededShuffle } from './prng.js';
-import { openBox } from './crypto.js';
 
 /** Stored with every answer; bump it whenever an answer format changes. */
 export const APP_VERSION = '1.0';
@@ -13,34 +12,17 @@ export const SECONDS_PER_ITEM = { compare: 165, interests: 120 };
 /** Papers shown in the reference list before "Show all". */
 export const PAPERS_SHOWN = 15;
 
-/** Fetch and decrypt the items; attaches each item's person (name, school, papers). */
-export async function loadItems(phrase) {
-  const res = await fetch('data/items.enc.json', { cache: 'no-cache' });
-  if (!res.ok) throw new Error(`data/items.enc.json: HTTP ${res.status}`);
-  const data = await openBox(await res.json(), phrase);
+/** Fetch the items; attaches each item's person (name, school, papers). */
+export async function loadItems() {
+  const res = await fetch('data/items.json', { cache: 'no-cache' });
+  if (!res.ok) throw new Error(`data/items.json: HTTP ${res.status}`);
+  const data = await res.json();
   const byId = new Map(data.sheets.map((s) => [s.id, s]));
   data.sheets = SHEET_ORDER.map((id) => byId.get(id)).filter(Boolean);
   for (const sheet of data.sheets) {
     for (const it of sheet.items) it.person = data.people[it.id];
   }
   return data;
-}
-
-/**
- * The public outline of the parts (data/outline.json, written by scripts/export_items.py): titles, how many
- * researchers, and the general instructions. It holds nothing about any person and is enough to draw the
- * start page while the items are still closed.
- */
-export async function loadOutline() {
-  const res = await fetch('data/outline.json', { cache: 'no-cache' });
-  if (!res.ok) throw new Error(`data/outline.json: HTTP ${res.status}`);
-  const o = await res.json();
-  const byId = new Map(o.sheets.map((s) => [s.id, s]));
-  return {
-    common_instructions: o.common_instructions,
-    sheets: SHEET_ORDER.map((id) => byId.get(id)).filter(Boolean)
-      .map((s) => ({ id: s.id, title: s.title, short: s.short, items: s.ranks.map((rank) => ({ rank })) })),
-  };
 }
 
 // ---- tracks ---------------------------------------------------------------------------------

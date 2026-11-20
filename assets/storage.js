@@ -7,8 +7,6 @@
 //   profrate:queue                        operations still to send to the server, oldest first
 //   profrate:failed                       operations the server refused (kept for the record)
 //   profrate:done:<code>                  ISO time the evaluator reached the finish screen
-//   profrate:key                          the key that opens the items (given by the server for the person's code, or the
-//                                         access phrase of an invitation link)
 
 const P = 'profrate:';
 const mem = new Map();
@@ -17,6 +15,7 @@ let persistent = true;
 try {
   localStorage.setItem(`${P}probe`, '1');
   localStorage.removeItem(`${P}probe`);
+  localStorage.removeItem(`${P}key`); // left by the first version of the site (until 20 Nov 2026); no longer used
 } catch {
   persistent = false;
 }
@@ -66,11 +65,6 @@ export const setCurrent = (who) => setJSON(`${P}current`, { code: who.code, name
 export const clearCurrent = () => delRaw(`${P}current`);
 export const getIdentity = (code) => getJSON(`${P}id:${code}`);
 export const setIdentity = (code, who) => setJSON(`${P}id:${code}`, { name: who.name, email: who.email, track: who.track });
-
-// ---- access phrase --------------------------------------------------------------------------
-export const getPhrase = () => getRaw(`${P}key`);
-export const setPhrase = (phrase) => setRaw(`${P}key`, phrase);
-export const clearPhrase = () => delRaw(`${P}key`);
 
 // ---- answers --------------------------------------------------------------------------------
 const answerKey = (code, sheet, itemId) => `${P}a:${code}:${sheet}:${itemId}`;
